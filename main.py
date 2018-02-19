@@ -6,6 +6,7 @@ import numpy as np
 import numpy.random
 
 import os
+os.environ["CUDA_VISIBLE_DEVICES"]="7"
 
 
 COLOR_ID = {0: 1, 3284960: 2, 10568276: 3, 8747549: 4, 11790730: 5, 5224717: 6, 9269902: 7, 9825272: 8}
@@ -132,8 +133,8 @@ def main(argv=None):
         #writer = tf.summary.FileWriter("logdir", sess.graph)
         sess.run(tf.global_variables_initializer())
 
-        saver.restore(sess, "./tf_ckpts/0.0.1/ToyNet_10_415.ckpt")
-        i = 10
+        #saver.restore(sess, "./tf_ckpts/0.0.1/ToyNet_10_415.ckpt")
+        i = 0
 
         while i <= 20000:
             i += 1
@@ -153,14 +154,14 @@ def main(argv=None):
 
                 d = np.argmax(outputs) - np.argmin(outputs)
 
-                a = np.argmax(outputs + np.random.rand(1, 6) * d * 1.3)
+                a = np.argmax(outputs + np.random.rand(1, 6) * d * 1.5)
                 print("action: ", a)
                 s1, r, done, _ = env.step(a)
                 totalScore += r
 
                 # avoid the reward is too big to cause NaN
                 r /= 5
-                env.render()
+                #env.render()
                 s1 = RGB2ColorID(s1)
                 s1 = np.reshape(s1, [210, 160, 1])
 
