@@ -5,6 +5,8 @@ import tensorflow as tf
 import numpy as np
 import numpy.random
 
+import os
+
 
 COLOR_ID = {0: 1, 3284960: 2, 10568276: 3, 8747549: 4, 11790730: 5, 5224717: 6, 9269902: 7, 9825272: 8}
 COLOR_CNT = 8
@@ -141,6 +143,7 @@ def main(argv=None):
             j = 0
             while j <= 20000:
                 j += 1
+                
                 print("====================================")
                 print("Round: %d, Steps: %d" % (i, j))
                 outputs = sess.run(net.outputs, feed_dict={net.inputs: np.reshape(s, [1, 210, 160, 1])})[0]
