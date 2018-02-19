@@ -132,7 +132,9 @@ def main(argv=None):
         #writer = tf.summary.FileWriter("logdir", sess.graph)
         sess.run(tf.global_variables_initializer())
 
-        i = 0
+        saver.restore(sess, "./tf_ckpts/0.0.1/ToyNet_10_415.ckpt")
+        i = 10
+
         while i <= 20000:
             i += 1
             s = env.reset()
@@ -143,12 +145,15 @@ def main(argv=None):
             j = 0
             while j <= 20000:
                 j += 1
-                
+
                 print("====================================")
                 print("Round: %d, Steps: %d" % (i, j))
                 outputs = sess.run(net.outputs, feed_dict={net.inputs: np.reshape(s, [1, 210, 160, 1])})[0]
                 print("outputs: ", outputs)
-                a = np.argmax(outputs + np.random.rand(1, 6) * (3)/(i+1))
+
+                d = np.argmax(outputs) - np.argmin(outputs)
+
+                a = np.argmax(outputs + np.random.rand(1, 6) * d * 1.3)
                 print("action: ", a)
                 s1, r, done, _ = env.step(a)
                 totalScore += r
