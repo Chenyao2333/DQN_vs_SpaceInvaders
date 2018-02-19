@@ -49,6 +49,7 @@ def RGB2ColorID(s):
 
 class ToyNet(object):
     def __init__(self):
+        self.__version__ = "0.0.1"
         self.inputs = tf.placeholder(dtype=tf.float16, shape=[None,210,160,1])
         self.conv1 = tf.layers.conv2d(self.inputs, filters = 12, strides = (2, 2), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
         self.conv2 = tf.layers.conv2d(self.conv1, filters = 12, strides = (2, 2), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
@@ -121,19 +122,25 @@ def main(argv=None):
     buff = Buffer(8)
 
     lr = 0.98
-    y = 0.99
+    y = 0.90
     
+    saver = tf.train.Saver()
+
     with tf.Session() as sess:
-        writer = tf.summary.FileWriter("logdir", sess.graph)
+        #writer = tf.summary.FileWriter("logdir", sess.graph)
         sess.run(tf.global_variables_initializer())
 
-        for i in range(20000):
+        i = 0
+        while i <= 20000:
+            i += 1
             s = env.reset()
             s = RGB2ColorID(s)
             s = np.reshape(s, [210, 160, 1])
             totalScore = 0
 
-            for j in range(20000):
+            j = 0
+            while j <= 20000:
+                j += 1
                 print("====================================")
                 print("Round: %d, Steps: %d" % (i, j))
                 outputs = sess.run(net.outputs, feed_dict={net.inputs: np.reshape(s, [1, 210, 160, 1])})[0]
@@ -144,7 +151,7 @@ def main(argv=None):
                 totalScore += r
 
                 # avoid the reward is too big to cause NaN
-                r /= 10
+                r /= 5
                 env.render()
                 s1 = RGB2ColorID(s1)
                 s1 = np.reshape(s1, [210, 160, 1])
@@ -171,8 +178,13 @@ def main(argv=None):
 
                 s = s1
 
-            with open("scores.txt", "wa") as f:
-                f.write("Eposide: %d, Score: %d\n" % (j, totalScore))
+            os.system("mkdir -p ./tf_ckpts/%s" % net.__version__)
+            saver.save(sess, "./tf_ckpts/%s/ToyNet_%d_%d.ckpt" % (net.__version__, i, totalScore))
+
+            with open("scores.txt", "a") as f:
+                f.write("Eposide: %d, Score: %d\n" % (i, totalScore))
+
+            
 
 
 
