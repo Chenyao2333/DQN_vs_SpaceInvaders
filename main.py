@@ -52,9 +52,10 @@ def RGB2ColorID(s):
 
 class ToyNet(object):
     def __init__(self):
-        self.__version__ = "0.0.1"
-        self.inputs = tf.placeholder(dtype=tf.float16, shape=[None,210,160,1])
-        self.conv1 = tf.layers.conv2d(self.inputs, filters = 12, strides = (2, 2), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
+        self.__version__ = "0.0.2"
+        self.inputs = tf.placeholder(dtype=tf.int32, shape=[None,210,160])
+        self.onehot = tf.one_hot(self.inputs, 8, dtype=tf.float16)
+        self.conv1 = tf.layers.conv2d(self.onehot, filters = 12, strides = (2, 2), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
         self.conv2 = tf.layers.conv2d(self.conv1, filters = 12, strides = (2, 2), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
         self.flat = tf.layers.flatten(self.conv2)
         self.dense1 = tf.layers.dense(self.flat, 512, activation=tf.nn.relu)
@@ -125,7 +126,7 @@ def main(argv=None):
     buff = Buffer(8)
 
     lr = 0.98
-    y = 0.90
+    y = 0.95
     
     saver = tf.train.Saver()
 
@@ -140,7 +141,7 @@ def main(argv=None):
             i += 1
             s = env.reset()
             s = RGB2ColorID(s)
-            s = np.reshape(s, [210, 160, 1])
+            s = np.reshape(s, [210, 160])
             totalScore = 0
 
             j = 0
@@ -149,12 +150,12 @@ def main(argv=None):
 
                 print("====================================")
                 print("Round: %d, Steps: %d" % (i, j))
-                outputs = sess.run(net.outputs, feed_dict={net.inputs: np.reshape(s, [1, 210, 160, 1])})[0]
+                outputs = sess.run(net.outputs, feed_dict={net.inputs: np.reshape(s, [1, 210, 160])})[0]
                 print("outputs: ", outputs)
 
                 d = np.argmax(outputs) - np.argmin(outputs)
 
-                a = np.argmax(outputs + np.random.rand(1, 6) * d * 1.5)
+                a = np.argmax(outputs + np.random.rand(1, 6) * d * np.max([0.1, 2 - i/10]))
                 print("action: ", a)
                 s1, r, done, _ = env.step(a)
                 totalScore += r
@@ -163,13 +164,13 @@ def main(argv=None):
                 r /= 5
                 #env.render()
                 s1 = RGB2ColorID(s1)
-                s1 = np.reshape(s1, [210, 160, 1])
+                s1 = np.reshape(s1, [210, 160])
 
                 # if it ends the game, we set this step as negtative reward
                 if done:
                     r = -5
 
-                next_r = np.max(sess.run(net.outputs, feed_dict={net.inputs: np.reshape(s1, [1, 210, 160, 1])})[0])
+                next_r = np.max(sess.run(net.outputs, feed_dict={net.inputs: np.reshape(s1, [1, 210, 160])})[0])
                 final_r = (1-lr)*outputs[a] + lr*(r + y*next_r)
 
                 print("next_r: ", next_r)
