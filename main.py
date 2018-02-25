@@ -4,6 +4,7 @@ import gym
 import tensorflow as tf
 import numpy as np
 import numpy.random
+import random
 
 import os
 os.environ["CUDA_VISIBLE_DEVICES"]="7"
@@ -52,23 +53,23 @@ def RGB2ColorID(s):
 
 class ToyNet(object):
     def __init__(self):
-        self.__version__ = "0.0.2"
+        self.__version__ = "0.0.3"
         self.inputs = tf.placeholder(dtype=tf.int32, shape=[None,210,160])
         self.onehot = tf.one_hot(self.inputs, 8, dtype=tf.float16)
         self.conv1 = tf.layers.conv2d(self.onehot, filters = 12, strides = (2, 2), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
         self.conv2 = tf.layers.conv2d(self.conv1, filters = 12, strides = (2, 2), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
         self.flat = tf.layers.flatten(self.conv2)
         self.dense1 = tf.layers.dense(self.flat, 512, activation=tf.nn.relu)
-        self.dense2 = tf.layers.dense(self.dense1, 512, activation=tf.nn.relu)
+        self.dense2 = tf.layers.dense(self.dense1, 512, activation=tf.nn.sigmoid)
         self.logits = tf.layers.dense(self.dense2, 6)
-        self.outputs = tf.clip_by_value(self.logits, -10, 100) # maximal rewards is 100*10
+        self.outputs = tf.clip_by_value(self.logits, -10, 100) # clip the rewards
 
         self.predicts = tf.argmax(self.outputs, 1)
 
         self.targets = tf.placeholder(dtype=tf.float16, shape=[None,6])
         self.loss = tf.div(tf.reduce_sum(tf.square(self.targets - self.outputs)), tf.cast(tf.shape(self.inputs)[0], tf.float16))
 
-        self.gd = tf.train.GradientDescentOptimizer(learning_rate=0.001)
+        self.gd = tf.train.GradientDescentOptimizer(learning_rate=0.005)
         self.optimize = self.gd.minimize(self.loss)
 
 
@@ -123,10 +124,11 @@ def main(argv=None):
     #     s.append(RGB2ColorID(s1))
 
     net = ToyNet()
-    buff = Buffer(8)
+    buff = Buffer(1)
 
     lr = 0.98
     y = 0.95
+    e = 0.05
     
     saver = tf.train.Saver()
 
@@ -134,7 +136,7 @@ def main(argv=None):
         #writer = tf.summary.FileWriter("logdir", sess.graph)
         sess.run(tf.global_variables_initializer())
 
-        #saver.restore(sess, "./tf_ckpts/0.0.1/ToyNet_10_415.ckpt")
+        #saver.restore(sess, "./tf_ckpts/0.0.2/ToyNet_15_195.ckpt")
         i = 0
 
         while i <= 20000:
@@ -153,15 +155,23 @@ def main(argv=None):
                 outputs = sess.run(net.outputs, feed_dict={net.inputs: np.reshape(s, [1, 210, 160])})[0]
                 print("outputs: ", outputs)
 
-                d = np.argmax(outputs) - np.argmin(outputs)
+                #d = np.argmax(outputs) - np.argmin(outputs)
 
-                a = np.argmax(outputs + np.random.rand(1, 6) * d * np.max([0.1, 2 - i/10]))
+                if random.random() < e:
+                    a = random.randint(0, 5)
+                else:
+                    a = np.argmax(outputs)
+
+
                 print("action: ", a)
                 s1, r, done, _ = env.step(a)
                 totalScore += r
 
-                # avoid the reward is too big to cause NaN
-                r /= 5
+                # psudo-normalize the reward
+                if r >= 200:
+                    r = 2
+                elif r > 0:
+                    r = 1
                 #env.render()
                 s1 = RGB2ColorID(s1)
                 s1 = np.reshape(s1, [210, 160])
@@ -179,7 +189,7 @@ def main(argv=None):
                 targets = np.copy(outputs)
                 targets[a] = final_r
 
-                if abs(final_r - outputs[a]) >0.1:
+                if abs(final_r - outputs[a]) >0.0001:
                     buff.put(s, targets)
                     buff.train(sess, net)
 
