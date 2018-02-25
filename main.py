@@ -5,6 +5,7 @@ import tensorflow as tf
 import numpy as np
 import numpy.random
 import random
+import math
 
 import os
 os.environ["CUDA_VISIBLE_DEVICES"]="7"
@@ -12,6 +13,11 @@ os.environ["CUDA_VISIBLE_DEVICES"]="7"
 
 COLOR_ID = {0: 1, 3284960: 2, 10568276: 3, 8747549: 4, 11790730: 5, 5224717: 6, 9269902: 7, 9825272: 8}
 COLOR_CNT = 8
+
+SKIP_FRAMES = 3
+LR = 0.01
+Y = 0.95
+E = 0.05
 
 def findCOLOR_ID():
     global COLOR_CNT, COLOR_ID
@@ -51,25 +57,28 @@ def RGB2ColorID(s):
     return ret
 
 
-class ToyNet(object):
+class DQN(object):
     def __init__(self):
-        self.__version__ = "0.0.3"
-        self.inputs = tf.placeholder(dtype=tf.int32, shape=[None,210,160])
+        self.__version__ = "0.0.4"
+        self.inputs = tf.placeholder(dtype=tf.int32, shape=[None, SKIP_FRAMES, 210, 160])
+        self.batch_size = tf.shape(self.inputs)[0]
+
         self.onehot = tf.one_hot(self.inputs, 8, dtype=tf.float16)
-        self.conv1 = tf.layers.conv2d(self.onehot, filters = 12, strides = (2, 2), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
-        self.conv2 = tf.layers.conv2d(self.conv1, filters = 12, strides = (2, 2), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
+        self.reshape = tf.reshape(self.onehot, [self.batch_size, 210, 160, SKIP_FRAMES * 8])
+        self.conv1 = tf.layers.conv2d(self.reshape, filters = 16, strides = (4, 4), kernel_size = (5, 5), padding="same", activation=tf.nn.relu)
+        self.conv2 = tf.layers.conv2d(self.conv1, filters = 32, strides = (4, 4), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
         self.flat = tf.layers.flatten(self.conv2)
-        self.dense1 = tf.layers.dense(self.flat, 512, activation=tf.nn.relu)
-        self.dense2 = tf.layers.dense(self.dense1, 512, activation=tf.nn.sigmoid)
+        self.dense1 = tf.layers.dense(self.flat, 256, activation=tf.nn.relu)
+        self.dense2 = tf.layers.dense(self.dense1, 128, activation=tf.nn.sigmoid)
         self.logits = tf.layers.dense(self.dense2, 6)
         self.outputs = tf.clip_by_value(self.logits, -10, 100) # clip the rewards
 
         self.predicts = tf.argmax(self.outputs, 1)
 
         self.targets = tf.placeholder(dtype=tf.float16, shape=[None,6])
-        self.loss = tf.div(tf.reduce_sum(tf.square(self.targets - self.outputs)), tf.cast(tf.shape(self.inputs)[0], tf.float16))
+        self.loss = tf.div(tf.reduce_sum(tf.square(self.targets - self.outputs)), tf.cast(self.batch_size, tf.float16))
 
-        self.gd = tf.train.GradientDescentOptimizer(learning_rate=0.005)
+        self.gd = tf.train.GradientDescentOptimizer(learning_rate=LR)
         self.optimize = self.gd.minimize(self.loss)
 
 
@@ -77,36 +86,130 @@ class ToyNet(object):
         #self.merged = tf.summary.merge_all()
 
 
-class Buffer(object):
-    def __init__(self, size):
-        self.buff = []
-        self.size = size
-        self.step = 0
+class ReplyBuffer(object):
+    def __init__(self, N = 100 * 100 * 100):
+        self.N = N
+        self.frames = [] # one item in frames constituting by SKIP_FRAMES images
+        self.actions = []
+        self.rewards = []
+        self.dones = []
 
-    def put(self, input, target):
-        self.buff.append((input, target))
-        if len(self.buff) > self.size:
-            self.buff = self.buff[-self.size:]
+    def put(self, frames, action, reward, done):
+        self.frames.append(frames)
+        self.actions.append(action)
+        self.rewards.append(reward)
+        self.dones.append(done)
+
+        self.frames = self.frames[-self.N:]
+        self.actions = self.actions[-self.N:]
+        self.rewards = self.rewards[-self.N:]
+        self.dones = self.dones[-self.N:]
     
-    def train(self, sess, net):
-        inputs = []
-        targets = []
+    def sample(self, batch_size = 32):
+        tot = len(self.actions) - 1
 
-        for inp, tar in self.buff:
-            #print(inp.shape, tar.shape)
-            inputs.append(inp)
-            targets.append(tar)
+        if tot < batch_size:
+            batch_size = tot
+            return None
+        
+        choices = []
+        while len(choices) < batch_size:
+            i = random.randint(0, tot - 1)
+            if i not in choices:
+                choices.append(i)
 
-        #inputs = np.reshape(np.array(inputs), [len(self.buff), 210, 160, 1])
-        #targets = np.reshape(np.array(targets), [len(self.buff), 6])
 
-        #print(inputs.shape, targets.shape)
+        ret = []
 
-        l, _ = sess.run([net.loss, net.optimize], feed_dict={net.inputs: inputs, net.targets: targets})
+        for i in choices:
+            s = {}
+            s["frames"] = self.frames[i]
+            s["action"] = self.actions[i]
+            s["reward"] = self.rewards[i]
+            s["next_frames"] = self.frames[i + 1]
+            s["done"] = self.dones[i]
 
-        self.step += 1
-        #writer.add_summary(summary, self.step)
-        print("loss: ", l)
+            ret.append(s)
+
+        return ret
+
+def reset(env):
+    frames = [RGB2ColorID(env.reset())]
+
+    for i in range(SKIP_FRAMES-1):
+        s1, _, _, _ = env.step(0)
+        s1 = RGB2ColorID(s1)
+        frames.append(s1)
+
+    return frames
+
+def cal_action(sess, env, net, f0, frames_cnt, training=False):
+    e = 0.05
+    if training:
+        e = np.max([0.1, 1 - frames_cnt/(100*100*100) * 0.9])
+    
+    if random.random() < e:
+        print("rand action: ")
+        return env.action_space.sample()
+
+    predicts = sess.run(net.predicts, feed_dict={net.inputs: [f0]})
+    print("predict action: ", predicts[0])
+    return predicts[0]
+
+def step(env, a):
+    f1 = []
+    reward = 0
+    done = False
+    scores = 0
+
+    for i in range(SKIP_FRAMES):
+        f, r, d, _ = env.step(a)
+        f = RGB2ColorID(f)
+        env.render()
+        if d:
+            f1 = []
+            reward = -1
+            done = True
+            return f1, reward, done, 0
+
+        f1.append(f)
+        reward += r
+    
+    scores = reward
+    if reward > 0:
+        reward = 1
+    
+    return f1, reward, done, scores
+
+def train(sess, buff, net):
+    samples = buff.sample()
+    if samples == None:
+        return
+    
+    frames = []
+    next_frames = []
+    for s in samples:
+        frames.append(s["frames"])
+        next_frames.append(s["next_frames"])
+    
+    noutputs = sess.run(net.outputs, feed_dict={net.inputs: next_frames})
+    targets = []
+    
+    for i in range(len(samples)):
+        r = samples[i]["reward"]
+
+        if not samples[i]["done"]:
+            r += Y*np.argmax(noutputs[i])
+        
+        a = samples[i]["action"]
+        t = np.copy(noutputs[i])
+        t[a] = r 
+
+        targets.append(t)
+
+    _, ouputs, loss = sess.run((net.optimize, net.outputs, net.loss), feed_dict={net.inputs: frames, net.targets: targets})
+    average_outputs = np.mean(ouputs)
+    print("average_outputs: %.3f, loss: %d" % (average_outputs, loss))
 
 def main(argv=None):
     #findCOLOR_ID()
@@ -114,24 +217,13 @@ def main(argv=None):
     env = gym.make("SpaceInvaders-v0")
     env.reset()
 
-    # s = []
-    # for i in range(20):
-    #     a = env.action_space.sample()
-    #     s1, _, done, _ = env.step(a)
-    #     if done:
-    #         break
-
-    #     s.append(RGB2ColorID(s1))
-
-    net = ToyNet()
-    buff = Buffer(1)
-
-    lr = 0.98
-    y = 0.95
-    e = 0.05
+    net = DQN()
+    buff = ReplyBuffer()
     
     saver = tf.train.Saver()
 
+    frames_cnt = 0
+    
     with tf.Session() as sess:
         #writer = tf.summary.FileWriter("logdir", sess.graph)
         sess.run(tf.global_variables_initializer())
@@ -139,72 +231,32 @@ def main(argv=None):
         #saver.restore(sess, "./tf_ckpts/0.0.2/ToyNet_15_195.ckpt")
         i = 0
 
-        while i <= 20000:
+        while frames_cnt <= 100*100*100*100*10:
             i += 1
-            s = env.reset()
-            s = RGB2ColorID(s)
-            s = np.reshape(s, [210, 160])
+            
+            f0 = reset(env)
             totalScore = 0
 
             j = 0
             while j <= 20000:
                 j += 1
 
-                print("====================================")
-                print("Round: %d, Steps: %d" % (i, j))
-                outputs = sess.run(net.outputs, feed_dict={net.inputs: np.reshape(s, [1, 210, 160])})[0]
-                print("outputs: ", outputs)
+                a0 = cal_action(sess, env, net, f0, frames_cnt, training=True)
+                f1, r0, done, scores = step(env, a0)
 
-                #d = np.argmax(outputs) - np.argmin(outputs)
+                totalScore += scores
 
-                if random.random() < e:
-                    a = random.randint(0, 5)
-                else:
-                    a = np.argmax(outputs)
+                buff.put(f0, a0, r0, done)
 
+                train(sess, buff, net)
 
-                print("action: ", a)
-                s1, r, done, _ = env.step(a)
-                totalScore += r
+                f0 = f1
 
-                # psudo-normalize the reward
-                if r >= 200:
-                    r = 2
-                elif r > 0:
-                    r = 1
-                #env.render()
-                s1 = RGB2ColorID(s1)
-                s1 = np.reshape(s1, [210, 160])
-
-                # if it ends the game, we set this step as negtative reward
+                frames_cnt += SKIP_FRAMES
                 if done:
-                    r = -5
-
-                next_r = np.max(sess.run(net.outputs, feed_dict={net.inputs: np.reshape(s1, [1, 210, 160])})[0])
-                final_r = (1-lr)*outputs[a] + lr*(r + y*next_r)
-
-                print("next_r: ", next_r)
-                print("final_r: ", final_r)
-
-                targets = np.copy(outputs)
-                targets[a] = final_r
-
-                if abs(final_r - outputs[a]) >0.0001:
-                    buff.put(s, targets)
-                    buff.train(sess, net)
-
-                if done:
+                    with open("scores.txt") as f:
+                        print("Episode: %d, Frames: %d, TotalFrames: %d, Scores: %d" % (i, j * SKIP_FRAMES, frames_cnt, totalScore))
                     break
-
-                s = s1
-
-            os.system("mkdir -p ./tf_ckpts/%s" % net.__version__)
-            saver.save(sess, "./tf_ckpts/%s/ToyNet_%d_%d.ckpt" % (net.__version__, i, totalScore))
-
-            with open("scores.txt", "a") as f:
-                f.write("Eposide: %d, Score: %d\n" % (i, totalScore))
-
-            
 
 
 
