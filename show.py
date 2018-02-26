@@ -34,14 +34,14 @@ def statistics():
 
     last_cnt = 0
     last_sum = 0
-    for it in scores[-10:]:
+    for it in scores[-200:]:
         last_cnt += 1
-        last_sum += it["Score"]
+        last_sum += it["Scores"]
 
     best = 0
     for it in scores:
-        if it["Score"] > best:
-            best = it["Score"] 
+        if it["Scores"] > best:
+            best = it["Scores"] 
 
     s += "Average last %d episode: %.2f\n" % (last_cnt, last_sum / last_cnt) 
     s += "Best score: %d\n" % best

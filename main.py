@@ -14,10 +14,14 @@ os.environ["CUDA_VISIBLE_DEVICES"]="7"
 COLOR_ID = {0: 1, 3284960: 2, 10568276: 3, 8747549: 4, 11790730: 5, 5224717: 6, 9269902: 7, 9825272: 8}
 COLOR_CNT = 8
 
+BUFF_SIZE = 100*100*10
+ANNEALED_FRAMES = 100*100*30
 SKIP_FRAMES = 3
-LR = 0.01
+LR = 0.005
 Y = 0.95
 E = 0.05
+
+RENDER = False
 
 def findCOLOR_ID():
     global COLOR_CNT, COLOR_ID
@@ -59,11 +63,12 @@ def RGB2ColorID(s):
 
 class DQN(object):
     def __init__(self):
-        self.__version__ = "0.0.4"
+        self.__version__ = "0.0.6"
         self.inputs = tf.placeholder(dtype=tf.int32, shape=[None, SKIP_FRAMES, 210, 160])
+        self.trans = tf.transpose(self.inputs, [0, 2, 3, 1])
         self.batch_size = tf.shape(self.inputs)[0]
 
-        self.onehot = tf.one_hot(self.inputs, 8, dtype=tf.float16)
+        self.onehot = tf.one_hot(self.trans, 8, dtype=tf.float16)
         self.reshape = tf.reshape(self.onehot, [self.batch_size, 210, 160, SKIP_FRAMES * 8])
         self.conv1 = tf.layers.conv2d(self.reshape, filters = 16, strides = (4, 4), kernel_size = (5, 5), padding="same", activation=tf.nn.relu)
         self.conv2 = tf.layers.conv2d(self.conv1, filters = 32, strides = (4, 4), kernel_size = (3, 3), padding="same", activation=tf.nn.relu)
@@ -82,12 +87,13 @@ class DQN(object):
         self.optimize = self.gd.minimize(self.loss)
 
 
-        #tf.summary.histogram("loss", self.loss)
-        #self.merged = tf.summary.merge_all()
+        tf.summary.scalar("loss", self.loss)
+        tf.summary.histogram("action", self.predicts)
+        self.merged = tf.summary.merge_all()
 
 
 class ReplyBuffer(object):
-    def __init__(self, N = 100 * 100 * 100):
+    def __init__(self, N = BUFF_SIZE):
         self.N = N
         self.frames = [] # one item in frames constituting by SKIP_FRAMES images
         self.actions = []
@@ -131,6 +137,7 @@ class ReplyBuffer(object):
 
             ret.append(s)
 
+        print("choices: ", choices)
         return ret
 
 def reset(env):
@@ -146,7 +153,7 @@ def reset(env):
 def cal_action(sess, env, net, f0, frames_cnt, training=False):
     e = 0.05
     if training:
-        e = np.max([0.1, 1 - frames_cnt/(100*100*100) * 0.9])
+        e = np.max([0.1, 1 - frames_cnt/ANNEALED_FRAMES * 0.9])
     
     if random.random() < e:
         print("rand action: ")
@@ -165,7 +172,8 @@ def step(env, a):
     for i in range(SKIP_FRAMES):
         f, r, d, _ = env.step(a)
         f = RGB2ColorID(f)
-        env.render()
+        if RENDER:
+            env.render()
         if d:
             f1 = []
             reward = -1
@@ -181,7 +189,7 @@ def step(env, a):
     
     return f1, reward, done, scores
 
-def train(sess, buff, net):
+def train(sess, buff, net, writer):
     samples = buff.sample()
     if samples == None:
         return
@@ -207,9 +215,11 @@ def train(sess, buff, net):
 
         targets.append(t)
 
-    _, ouputs, loss = sess.run((net.optimize, net.outputs, net.loss), feed_dict={net.inputs: frames, net.targets: targets})
+    _, ouputs, loss, merged = sess.run((net.optimize, net.outputs, net.loss, net.merged), feed_dict={net.inputs: frames, net.targets: targets})
+    
     average_outputs = np.mean(ouputs)
-    print("average_outputs: %.3f, loss: %d" % (average_outputs, loss))
+    print("average_outputs: %.3f, loss: %.3f" % (average_outputs, loss))
+    writer.add_summary(merged)
 
 def main(argv=None):
     #findCOLOR_ID()
@@ -225,7 +235,7 @@ def main(argv=None):
     frames_cnt = 0
     
     with tf.Session() as sess:
-        #writer = tf.summary.FileWriter("logdir", sess.graph)
+        writer = tf.summary.FileWriter("logdir", sess.graph)
         sess.run(tf.global_variables_initializer())
 
         #saver.restore(sess, "./tf_ckpts/0.0.2/ToyNet_15_195.ckpt")
@@ -248,14 +258,18 @@ def main(argv=None):
 
                 buff.put(f0, a0, r0, done)
 
-                train(sess, buff, net)
+                train(sess, buff, net, writer)
 
                 f0 = f1
 
                 frames_cnt += SKIP_FRAMES
                 if done:
-                    with open("scores.txt") as f:
-                        print("Episode: %d, Frames: %d, TotalFrames: %d, Scores: %d" % (i, j * SKIP_FRAMES, frames_cnt, totalScore))
+                    with open("scores.txt", "a") as f:
+                        f.write("Episode: %d, Frames: %d, TotalFrames: %d, Scores: %d\n" % (i, j * SKIP_FRAMES, frames_cnt, totalScore))
+
+                    os.system("mkdir -p ./tf_ckpts/%s" % net.__version__)
+                    saver.save(sess, "./tf_ckpts/%s/DQN_%d_%d.ckpt" % (net.__version__, i, totalScore))
+
                     break
 
 
